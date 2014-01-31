@@ -6,16 +6,16 @@ Drupal Commerce PayPal Adaptivement Simple Payments
 This is a simplified version of Commerce PayPal Chained
 
 # Commerce Paypal Chained
-*All sources are based on Commerce PayPal Chained
-;About PayPal Chained
-:https://drupal.org/node/2082691
-:https://github.com/chrisolof/commerce_paypal_chained
+*All source files are copied from Commerce PayPal Chained
+
+Information about About PayPal Chained
+1. https://drupal.org/node/2082691
+2. https://github.com/chrisolof/commerce_paypal_chained
 
 
 # How to Use 
-When a buyer buy something, it will automatically pay to the product owner.
-So you must register its PayPal account when you sign up Drupal
+1. Remove receivers from Paypal Chained
+2. When a buyer buy something, it will automatically pay to the product owner.
+So you must fill in your PayPal account when you sign up a Drupal site
 
-[
-[[File:example2.png|640px]([File:example.png|640px]])]
-]
+![alt text](../../../images/blob/master/RegisterPaypalAccount.png?raw=true)
