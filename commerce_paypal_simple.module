@@ -1,0 +1,1097 @@
+<?php
+
+/**
+ * @file
+ * Implements PayPal Simple Payments in Drupal Commerce checkout.
+ */
+
+/**
+ * Implements hook_commerce_payment_method_info().
+ */
+function commerce_paypal_simple_commerce_payment_method_info() {
+  $payment_methods = array();
+
+  $payment_methods['paypal_simple'] = array(
+    'base' => 'commerce_paypal_simple',
+    'title' => t('PayPal Simple'),
+    'short_title' => t('PayPal'),
+    'description' => t('PayPal Website Payments Standard'),
+    'terminal' => FALSE,
+    'offsite' => TRUE,
+    'offsite_autoredirect' => TRUE,
+  );
+
+  return $payment_methods;
+}
+
+/**
+ * Implements hook_entity_info_alter().
+ */
+function commerce_paypal_simple_entity_info_alter(&$entity_info) {
+  // Alter the commerce_payment_transaction entity info to make it fieldable
+  $entity_info['commerce_payment_transaction']['fieldable'] = TRUE;
+}
+
+/**
+ * Implements hook_menu().
+ */
+function commerce_paypal_simple_menu() {
+
+  dd(__FUNCTION__, date("h:i:s" ,time()));
+  $items = array();
+
+  // Define an additional IPN path that is specific to our payment method /
+  // instance.
+  $items['commerce_paypal/paypal-simple/ipn'] = array(
+    'page callback' => 'commerce_paypal_simple_process_ipn',
+    'page arguments' => array(),
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+/**
+ * Returns the default settings for the PayPal Simple payment method.
+ */
+function commerce_paypal_simple_default_settings() {
+dd(__FUNCTION__, date("h:i:s" ,time()));
+  $default_currency = commerce_default_currency();
+  return array(
+    'application_id' => '',
+    'api_username' => '',
+    'api_caller_email' => '',
+    'api_password' => '',
+    'api_signature' => '',
+    'currency_code' => in_array($default_currency, array_keys(commerce_paypal_simple_currencies())) ? $default_currency : 'USD',
+    'allow_supported_currencies' => FALSE,
+    'language' => 'US',
+    'server' => 'sandbox',
+    'ipn_logging' => 'notification',
+    'ipn_create_billing_profile' => FALSE,
+    'show_payment_instructions' => FALSE,
+/*
+    'pay_chain' => array(
+      'primary_receiver' => array(
+        'primary_receiver_percentage' => '100.00',
+        'primary_receiver_email' => '',
+      ),
+    ),
+*/
+  );
+}
+
+/**
+ * Payment method callback: settings form.
+ */
+function commerce_paypal_simple_settings_form($settings = array()) {
+  dd(__FUNCTION__, date("h:i:s" ,time()));
+  $form = array();
+
+  // Merge default settings into the stored settings array.
+  $settings = (array) $settings + commerce_paypal_simple_default_settings();
+
+  $form['api_caller_email'] = array(
+    '#type' => 'textfield',
+    '#title' => t('PayPal API caller email'),
+    '#description' => t('Your PayPal email account as a API caller'),
+    '#default_value' => $settings['api_caller_email'],
+    '#required' => TRUE,
+  );
+  $form['application_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('PayPal application id'),
+    '#description' => t('Your PayPal application\'s identification, issued by PayPal.'),
+    '#default_value' => $settings['application_id'],
+    '#required' => TRUE,
+  );
+  $form['api_username'] = array(
+    '#type' => 'textfield',
+    '#title' => t('PayPal API username'),
+    '#description' => t('Your PayPal API username.'),
+    '#default_value' => $settings['api_username'],
+    '#required' => TRUE,
+  );
+  $form['api_password'] = array(
+    '#type' => 'textfield',
+    '#title' => t('PayPal API password'),
+    '#description' => t('Your PayPal API password.'),
+    '#default_value' => $settings['api_password'],
+    '#required' => TRUE,
+  );
+  $form['api_signature'] = array(
+    '#type' => 'textfield',
+    '#title' => t('PayPal API signature'),
+    '#description' => t('Your PayPal API signature.'),
+    '#default_value' => $settings['api_signature'],
+    '#required' => TRUE,
+  );
+  $form['currency_code'] = array(
+    '#type' => 'select',
+    '#title' => t('Default currency'),
+    '#description' => t('Transactions in other currencies will be converted to this currency, so multi-currency sites must be configured to use appropriate conversion rates.'),
+    '#options' => commerce_paypal_simple_currencies(),
+    '#default_value' => $settings['currency_code'],
+  );
+  $form['allow_supported_currencies'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Allow transactions to use any currency in the options list above.'),
+    '#description' => t('Transactions in unsupported currencies will still be converted into the default currency.'),
+    '#default_value' => $settings['allow_supported_currencies'],
+  );
+  $form['language'] = array(
+    '#type' => 'select',
+    '#title' => t('PayPal login page language / locale'),
+    '#options' => commerce_paypal_simple_languages(),
+    '#default_value' => $settings['language'],
+  );
+  $form['server'] = array(
+    '#type' => 'radios',
+    '#title' => t('PayPal server'),
+    '#options' => array(
+      'sandbox' => ('Sandbox - use for testing, requires a PayPal Sandbox account'),
+      'live' => ('Live - use for processing real transactions'),
+    ),
+    '#default_value' => $settings['server'],
+  );
+  $form['ipn_logging'] = array(
+    '#type' => 'radios',
+    '#title' => t('IPN logging'),
+    '#options' => array(
+      'notification' => t('Log notifications during IPN validation and processing.'),
+      'full_ipn' => t('Log notifications with the full IPN during validation and processing (used for debugging).'),
+    ),
+    '#default_value' => $settings['ipn_logging'],
+  );
+  $form['show_payment_instructions'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Show a message on the checkout form when PayPal Simple is selected telling the customer to "Continue with checkout to complete payment via PayPal."'),
+    '#default_value' => $settings['show_payment_instructions'],
+  );
+/*
+  // Paychain definition
+  $form['pay_chain'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Payment Receiver'),
+    '#collapsible' => FALSE,
+    '#collapsed' => FALSE,
+  );
+*/
+/*
+  $form['pay_chain']['primary_receiver'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Receiver'),
+    '#collapsible' => FALSE,
+    '#collapsed' => FALSE,
+    '#description' => t('The primary receiver is the primary party to receive payment and initially receives 100% of the payment.'),
+  );
+  $form['pay_chain']['primary_receiver']['primary_receiver_email'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Receiver\'s PayPal e-mail address'),
+    '#description' => t('The e-mail address of the receiver\'s PayPal account.'),
+    '#default_value' => $settings['pay_chain']['primary_receiver']['primary_receiver_email'],
+    '#required' => TRUE,
+  );
+*/
+/*
+  // If token is installed, this paychain is token-enabled
+  if (module_exists('token')) {
+    $form['pay_chain']['tokens'] = array(
+      '#theme' => 'token_tree',
+      '#token_types' => array('commerce-order'),
+    );
+  }
+*/
+  return $form;
+}
+
+/**
+ * Payment method callback: adds a message to the submission form if enabled in
+ * the payment method settings.
+ */
+function commerce_paypal_simple_submit_form($payment_method, $pane_values, $checkout_pane, $order) {
+  dd(__FUNCTION__, date("h:i:s" ,time()));
+  $form = array();
+
+  if (!empty($payment_method['settings']['show_payment_instructions'])) {
+    $form['paypal_simple_information'] = array(
+      '#markup' => '<span class="commerce-paypal-simple-info">' . t('(Continue with checkout to complete payment via PayPal.)') . '</span>',
+    );
+  }
+
+  return $form;
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function commerce_paypal_simple_form_commerce_checkout_form_alter(&$form, &$form_state) {
+  dd(__FUNCTION__, date("h:i:s" ,time()));
+  // If this checkout form contains the payment method radios...
+  if (!empty($form['commerce_payment']['payment_method']['#options'])) {
+    // Loop over its options array looking for a PayPal Simple option.
+    foreach ($form['commerce_payment']['payment_method']['#options'] as $key => &$value) {
+      list($method_id, $rule_name) = explode('|', $key);
+
+      // If we find PayPal Simple...
+      if ($method_id == 'paypal_simple') {
+        // Prepare the replacement radio button text with icons.
+        $icons = commerce_paypal_icons();
+        $value = t('!logo PayPal - pay(simple) securely without sharing your financial information', array('!logo' => $icons['paypal']));
+        $value .= '<div class="commerce-paypal-icons"><span class="label">' . t('Includes:') . '</span>' . implode(' ', $icons) . '</div>';
+
+        // Add the CSS.
+        $form['commerce_payment']['payment_method']['#attached']['css'][] = drupal_get_path('module', 'commerce_paypal_simple') . '/theme/commerce_paypal_simple.theme.css';
+
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * [If you are the sender and the caller, the approval is implicit
+ * @param  [type] $form           [description]
+ * @param  [type] $form_state     [description]
+ * @param  [type] $order          [description]
+ * @param  [type] $payment_method [description]
+ * @return [type]                 [description]
+ */
+function commerce_paypal_simple_immplicitly_approved($order, $payment_method) {
+ // Get product id from first order line item.
+ // the following code is copied from clevername, https://drupal.org/node/2050565
+  $orders = commerce_order_load_multiple(array(), array('status' => 'pending'), TRUE);
+
+  foreach($orders as $order) {
+    foreach ($order->commerce_line_items['und'] as $line) {
+      $line_item = commerce_line_item_load($line['line_item_id']);
+      $product_id = $line_item->commerce_product['und'][0]['product_id'];
+    }
+  //Load first product from order line item and fetch author uid
+    $product_item = commerce_product_load($product_id);
+    $product_uid = $product_item->uid;
+  }
+  if ($product_uid == 1)
+    return TRUE;
+  else
+    return FALSE;
+}
+
+function commerce_paypal_simple_get_product_owner($order) {
+ // the following code is copied from clevername, https://drupal.org/node/2050565
+  $orders = commerce_order_load_multiple(array(), array('status' => 'pending'), TRUE);
+
+  foreach($orders as $order) {
+    foreach ($order->commerce_line_items['und'] as $line) {
+      $line_item = commerce_line_item_load($line['line_item_id']);
+      $product_id = $line_item->commerce_product['und'][0]['product_id'];
+    }
+  //Load first product from order line item and fetch author uid
+    $product_item = commerce_product_load($product_id);
+    $product_uid = $product_item->uid;
+  }
+  return $product_uid;
+}
+
+/**
+ * Payment method callback: redirect form, a wrapper around the module's general
+ *   use function for building a simple form.
+ */
+function commerce_paypal_simple_redirect_form($form, &$form_state, $order, $payment_method) {
+  dd(__FUNCTION__, date("h:i:s" ,time()));
+  dd(ddebug_backtrace(true));
+
+  // Return an error if the enabling action's settings haven't been configured.
+  if (empty($payment_method['settings']['application_id']) ||
+    empty($payment_method['settings']['api_username']) ||
+    empty($payment_method['settings']['api_password']) ||
+    empty($payment_method['settings']['api_signature'])) {
+    drupal_set_message(t('PayPal Simple is not configured for use.'), 'error');
+    return array();
+  }
+
+  $settings = array(
+    // Return to the previous page when payment is canceled
+    'cancel_return' => url('checkout/' . $order->order_id . '/payment/back/' . $order->data['payment_redirect_key'], array('absolute' => TRUE)),
+
+    // Return to the payment redirect page for processing successful payments
+    'return' => url('checkout/' . $order->order_id . '/payment/return/' . $order->data['payment_redirect_key'], array('absolute' => TRUE)),
+
+    // Specify the current payment method instance ID in the notify_url
+    'payment_method' => $payment_method['instance_id'],
+  );
+
+  return commerce_paypal_simple_order_form($form, $form_state, $order, $payment_method['settings'] + $settings);
+}
+
+/**
+ * Payment method callback: redirect form return validation.
+ */
+function commerce_paypal_simple_redirect_form_validate($order, $payment_method) {
+  dd(__FUNCTION__, date("h:i:s" ,time()));
+  if (!empty($payment_method['settings']['ipn_logging']) &&
+    $payment_method['settings']['ipn_logging'] == 'full_ipn') {
+    watchdog('commerce_paypal_simple', 'Customer returned from PayPal with the following POST data:!ipn_data', array('!ipn_data' => '<pre>' . check_plain(print_r($_POST, TRUE)) . '</pre>'), WATCHDOG_NOTICE);
+  }
+
+  // This may be an unnecessary step, but if for some reason the user does end
+  // up returning at the success URL with a Failed payment, go back.
+  if (!empty($_POST['payment_status']) && $_POST['payment_status'] == 'Failed') {
+    return FALSE;
+  }
+}
+
+/**
+ * Loads a stored simple payment IPN by ID.
+ *
+ * @param $id
+ *   The ID of the IPN to load.
+ * @param $type
+ *   The type of ID you've specified, either the serial numeric ipn_id or the
+ *     actual PayPal pay_key. Defaults to pay_key.
+ *
+ * @return
+ *   The original IPN with some meta data related to local processing.
+ */
+function commerce_paypal_simple_ipn_load($id, $type = 'pay_key') {
+  dd(__FUNCTION__, date("h:i:s" ,time()));
+  // Grab the base IPN array
+  $ipn = db_select('commerce_paypal_simple_ipn', 'cpci')
+    ->fields('cpci')
+    ->condition('cpci.' . $type, $id)
+    ->execute()
+    ->fetchAssoc();
+  // Grab this IPN's transactions (simple payments)
+  $result = db_select('commerce_paypal_simple_ipn_transaction', 'cpcit')
+    ->fields('cpcit')
+    ->condition('cpcit.ipn_transaction_id', $ipn['ipn_id'])
+    ->execute();
+  // Add these simple transactions into the IPN
+  while ($record = $result->fetchAssoc()) {
+    $ipn['transaction'][] = $record;
+  }
+  return $ipn;
+}
+
+/**
+ * Saves an IPN with some meta data related to local processing.
+ *
+ * @param $ipn
+ *   An IPN array with additional parameters associated with the IPN.
+ *
+ * @return
+ *   TRUE on success, FALSE on failure; since the IPN is received by reference,
+ *     it will also contain the serial numeric ipn_id used locally.
+ */
+function commerce_paypal_simple_ipn_save(&$ipn) {
+  dd(__FUNCTION__, date("h:i:s" ,time()));
+  // Split our transactions off of our IPN since they get stored in different
+  // tables
+  $ipn_transactions = $ipn['transaction'];
+  unset($ipn['transaction']);
+  if (!empty($ipn['ipn_id']) && commerce_paypal_simple_ipn_load($ipn['pay_key'])) {
+    // Pre-existing IPN
+    // Update the changed timestamp in this IPN
+    $ipn['changed'] = REQUEST_TIME;
+    // Attempt to save the IPN
+    if (drupal_write_record('commerce_paypal_simple_ipn', $ipn, 'ipn_id')) {
+      // Success - store the ipn transactions
+      if (commerce_paypal_simple_ipn_transactions_save($ipn_transactions, $ipn['ipn_id'])) {
+        $ipn['transaction'] = $ipn_transactions;
+        return TRUE;
+      }
+      else {
+        return FALSE;
+      }
+    }
+    else {
+      return FALSE;
+    }
+  }
+  else {
+    // New IPN
+    $ipn['created'] = REQUEST_TIME;
+    $ipn['changed'] = REQUEST_TIME;
+    // Attempt to save the IPN
+    if (drupal_write_record('commerce_paypal_simple_ipn', $ipn)) {
+      // Success - store the ipn transactions
+      if (commerce_paypal_simple_ipn_transactions_save($ipn_transactions, $ipn['ipn_id'])) {
+        $ipn['transaction'] = $ipn_transactions;
+        return TRUE;
+      }
+      else {
+        return FALSE;
+      }
+    }
+    else {
+      return FALSE;
+    }
+  }
+}
+
+/**
+ * Saves an IPN's transactions with some meta data related to local processing.
+ *
+ * @param $ipn_transactions
+ *   An IPN transactions array.
+ * @param $ipn_id
+ *   The ipn_id of the parent IPN.
+ *
+ * @return
+ *   TRUE on success, FALSE on failure; since the IPN transactions are
+ *     received by reference, they will also contain the serial numeric
+ *      ipn_transaction_ids used locally.
+ */
+function commerce_paypal_simple_ipn_transactions_save(&$ipn_transactions, $ipn_id) {
+  dd(__FUNCTION__, date("h:i:s" ,time()));
+
+  foreach ($ipn_transactions as $key => $ipn_transaction) {
+    // Associate this ipn transaction with its parent IPN
+    $ipn_transaction['ipn_id'] = $ipn_id;
+    // Break out currency code and gross transaction amount from the amount line
+    list($ipn_transaction['currency'], $ipn_transaction['gross']) = explode(' ', $ipn_transaction['amount']);
+    if (!empty($ipn_transaction['ipn_transaction_id'])) {
+      // Pre-existing ipn transaction
+      if (drupal_write_record('commerce_paypal_simple_ipn_transaction', $ipn_transaction, 'ipn_transaction_id')) {
+        // drupal_write_record() may have updated our transaction - so store it
+        $ipn_transactions[$key] = $ipn_transaction;
+      }
+      else {
+        // Return false on failure to write this record
+        return FALSE;
+      }
+    }
+    else {
+      if (drupal_write_record('commerce_paypal_simple_ipn_transaction', $ipn_transaction)) {
+        // drupal_write_record() updated our transaction - so store it
+        $ipn_transactions[$key] = $ipn_transaction;
+      }
+      else {
+        // Return false on failure to write this record
+        return FALSE;
+      }
+    }
+  }
+  return TRUE;
+}
+
+/**
+ * Deletes a stored simple payment IPN by ID.
+ *
+ * @param $id
+ *   The ipn_id of the IPN you wish to delete.
+ */
+function commerce_paypal_simple_ipn_delete($id) {
+  // Delete out any of this IPN's simple transactions
+  db_delete('commerce_paypal_simple_ipn_transaction')
+    ->condition('ipn_id', $id)
+    ->execute();
+  // Delete the IPN itself
+  db_delete('commerce_paypal_simple_ipn')
+    ->condition('ipn_id', $id)
+    ->execute();
+}
+
+/**
+ * Processes an incoming simple payment IPN.
+ *
+ * @param $debug_ipn
+ *   Optionally specify an IPN array for debug purposes; if left empty, the IPN
+ *     be pulled from php://input. If an IPN is passed in, validation of the IPN
+ *     at PayPal will be bypassed.
+ *
+ * @return
+ *   TRUE or FALSE indicating whether the IPN was successfully processed or not.
+ */
+function commerce_paypal_simple_process_ipn($debug_ipn = array()) {
+  dd(__FUNCTION__, date("h:i:s" ,time()));
+  // Load up our payment method instance array
+  $payment_method = commerce_payment_method_instance_load('paypal_simple|commerce_payment_paypal_simple');
+  // Retrieve the IPN from $_POST if the caller did not supply an IPN array.
+  // Note that Drupal has already run stripslashes() on the contents of the
+  // $_POST array at this point, so we don't need to worry about them.
+  if (empty($debug_ipn)) {
+    // We can't rely on $_POST for our IPN vars because PayPal sends them back
+    // nested in such a way that PHP can't interpret the nested transactions
+    // array
+    // So in this case we have nested POST data we have to parse into an array
+    // by hand
+    $raw_ipn = file_get_contents("php://input");
+    // Exit now if we have no ipn data.
+    if (empty($raw_ipn)) {
+      watchdog('commerce_paypal_simple', 'IPN URL accessed with no POST data submitted.', array(), WATCHDOG_WARNING);
+      return FALSE;
+    }
+    // Decode the URL-encoded bits
+    $decoded_ipn = urldecode($raw_ipn);
+    // Break apart our variables
+    $vars = explode('&', $decoded_ipn);
+    // Initialize the array we'll be filling
+    $ipn = array();
+    foreach ($vars as $var) {
+      // First, split our data pairs up on the first '='
+      list($key, $value) = explode('=', $var, 2);
+      // So, if $key contains '[x]' then we're looking at data that's part of an
+      // array
+      // PayPal's format is basically "variable-name[iteration].property-name = value"
+      // We'll turn this into $ipn['variable-name'][iteration]['property-name'] = value so we
+      // can work with this data in PHP
+      if (preg_match("/.*?(\\d+)/is", $key, $matches)) {
+        // We are looking at an array
+        // Grab the variable name
+        $variable_name = substr($key, 0, strpos($key, '['));
+        // Our iteration is the integer x in "[x]", which is stored in $matches[1]
+        $iteration = $matches[1];
+        // Grab the property name
+        $property_name = substr($key, strpos($key, '.') + 1);
+        // Ok - we have what we need to store this
+        $ipn[$variable_name][$iteration][$property_name] = $value;
+      }
+      else {
+        // This is just a regular key-value pair so store as such
+        $ipn[$key] = $value;
+      }
+    }
+    // Exit now if we have no pay key
+    if (empty($ipn['pay_key'])) {
+      watchdog('commerce_paypal_simple', 'IPN URL accessed with no pay_key in POST data submitted.', array(), WATCHDOG_WARNING);
+      return FALSE;
+    }
+
+    // IPN validation time...
+    // Basically, verify with PayPal that it just sent us this message
+
+    // Determine the proper PayPal server to POST to.
+    if (!empty($ipn['test_ipn']) && $ipn['test_ipn'] == 1) {
+      $host = 'https://www.sandbox.paypal.com/cgi-bin/webscr';
+    }
+    else {
+      $host = 'https://www.paypal.com/cgi-bin/webscr';
+    }
+
+    // Process the HTTP request to validate the IPN.
+    $response = drupal_http_request($host, array('method' => 'POST', 'data' => 'cmd=_notify-validate&' . $raw_ipn));
+
+    // If an error occurred during processing, log the message and exit.
+    if (property_exists($response, 'error')) {
+      watchdog('commerce_paypal_simple', 'Attempt to validate IPN failed with error @code: @error', array('@code' => $response->code, '@error' => $response->error), WATCHDOG_ERROR);
+      return FALSE;
+    }
+
+    // If the IPN was invalid, log a message and exit.
+    if ($response->data == 'INVALID') {
+      watchdog('commerce_paypal_simple', 'Invalid IPN received and ignored.', array(), WATCHDOG_ALERT);
+      return FALSE;
+    }
+  }
+  else {
+    $ipn = $debug_ipn;
+  }
+
+  // If the payment method specifies full IPN logging, do it now.
+  if (!empty($payment_method['settings']['ipn_logging']) &&
+    $payment_method['settings']['ipn_logging'] == 'full_ipn') {
+    if (!empty($ipn['pay_key'])) {
+      watchdog('commerce_paypal_simple', 'Attempting to process IPN @pay_key. !ipn_log', array('@pay_key' => $ipn['pay_key'], '!ipn_log' => '<pre>' . check_plain(print_r($ipn, TRUE)) . '</pre>'), WATCHDOG_NOTICE);
+    }
+    else {
+      watchdog('commerce_paypal_simple', 'Attempting to process an IPN. !ipn_log', array('!ipn_log' => '<pre>' . check_plain(print_r($ipn, TRUE)) . '</pre>'), WATCHDOG_NOTICE);
+    }
+  }
+
+  // Exit if the IPN has already been processed.
+  if (!empty($ipn['pay_key']) && $prior_ipn = commerce_paypal_simple_ipn_load($ipn['pay_key'])) {
+    // TODO
+    // Dive down into each item in the pay chain checking status - if all
+    // statuses match what they were the last time around, we've already seen
+    // this.  Otherwise - if a status is different then we need to adjust the
+    // transaction associated with that simple payment in
+    // commerce_paypal_simple_paypal_ipn_process().
+    // TODO - verify IPNs are sent out when any piece of the chain changes
+    // For now - we only accept one IPN with this paykey
+    watchdog('commerce_paypal_simple', 'Attempted to process an IPN that has already been processed with transaction ID @pay_key.', array('@pay_key' => $ipn['pay_key']), WATCHDOG_NOTICE);
+    return FALSE;
+  }
+
+  // Load the order based on the IPN's invoice number, which we've stored in
+  // tracking_id.
+  if (!empty($ipn['tracking_id']) && strpos($ipn['tracking_id'], '-') !== FALSE) {
+    list($ipn['order_id'], $timestamp) = explode('-', $ipn['tracking_id']);
+  }
+  elseif (!empty($ipn['tracking_id'])) {
+    $ipn['order_id'] = $ipn['tracking_id'];
+  }
+  else {
+    $ipn['order_id'] = 0;
+    $timestamp = 0;
+  }
+
+  if (!empty($ipn['order_id'])) {
+    $order = commerce_order_load($ipn['order_id']);
+  }
+  else {
+    $order = FALSE;
+  }
+  // Give the payment method module an opportunity to validate the receiver
+  // e-mail address and amount of the payment if possible. If a validate
+  // function exists, it is responsible for setting its own watchdog message.
+  if (!empty($payment_method)) {
+    $callback = $payment_method['base'] . '_paypal_ipn_validate';
+
+    // If a validator function existed...
+    if (function_exists($callback)) {
+      // Only exit if the function explicitly returns FALSE.
+      if ($callback($order, $payment_method, $ipn) === FALSE) {
+        return FALSE;
+      }
+    }
+  }
+
+  // Give the payment method module an opportunity to process the IPN.
+  if (!empty($payment_method)) {
+    $callback = $payment_method['base'] . '_paypal_ipn_process';
+
+    // If a processing function existed...
+    if (function_exists($callback)) {
+      // Skip saving if the function explicitly returns FALSE, meaning the IPN
+      // wasn't actually processed.
+      if ($callback($order, $payment_method, $ipn) !== FALSE) {
+        // Save the processed IPN details.
+        commerce_paypal_simple_ipn_save($ipn);
+      }
+    }
+  }
+
+  // Invoke the hook here so implementations have access to the order and
+  // payment method if available and a saved IPN array that includes the payment
+  // transaction ID if created in the payment method's default process callback.
+  module_invoke_all('commerce_paypal_ipn_process', $order, $payment_method, $ipn);
+}
+
+/**
+ * Payment method callback: validate an IPN based on receiver e-mail address,
+ *   price, and other parameters as possible.
+ */
+function commerce_paypal_simple_paypal_ipn_validate($order, $payment_method, $ipn) {
+  dd(__FUNCTION__, date("h:i:s" ,time()));
+  // Return FALSE if chain described in this IPN doesn't match the chain we have
+  // recorded for this order
+  $record = db_select('commerce_paypal_simple_pay_chain', 'cpcpc')
+    ->fields('cpcpc', array('currency', 'data'))
+    ->condition('cpcpc.order_id', $order->order_id)
+    ->execute()
+    ->fetch();
+  if (!empty($record->data)) {
+    // The chain array is held in a serialized data field
+    $known_chain = unserialize($record->data);
+    // First off - are we looking at the same number of receivers?
+    if (count($known_chain) == count($ipn['transaction'])) {
+      // Loop through the ipn transactions chain verifying the values match our
+      // known chain
+      foreach ($ipn['transaction'] as $key => $ipn_transaction) {
+        // Break out our currency code and transaction amount
+        list($currency, $gross) = explode(' ', $ipn_transaction['amount']);
+        // Test for consistency with what we have on file
+        if ($gross != $known_chain[$key]['amount'] ||
+          $ipn_transaction['receiver'] != $known_chain[$key]['email'] ||
+          $currency != $record->currency ||
+          $ipn_transaction['is_primary_receiver'] != $known_chain[$key]['primary']) {
+          watchdog('commerce_paypal_simple', 'IPN rejected: invalid pay chain specified for Order @order_number; must match the pay chain on file for this order.', array('@order_number' => $order->order_number), WATCHDOG_NOTICE);
+          return FALSE;
+        }
+      }
+    }
+    else {
+      watchdog('commerce_paypal_simple', 'IPN rejected: invalid pay chain specified for Order @order_number; wrong number of receivers.', array('@order_number' => $order->order_number), WATCHDOG_NOTICE);
+      return FALSE;
+    }
+  }
+  else {
+    watchdog('commerce_paypal_simple', 'IPN rejected: no pay chain on file for Order @order_number.', array('@order_number' => $order->order_number), WATCHDOG_NOTICE);
+    return FALSE;
+  }
+
+  // Prepare the IPN data for inclusion in the watchdog message if enabled.
+  $ipn_data = '';
+
+  if (!empty($payment_method['settings']['ipn_logging']) &&
+    $payment_method['settings']['ipn_logging'] == 'full_ipn') {
+    $ipn_data = '<pre>' . check_plain(print_r($ipn, TRUE)) . '</pre>';
+  }
+
+  // Log a message including the PayPal transaction ID if available.
+  if (!empty($ipn['pay_key'])) {
+    watchdog('commerce_paypal_simple', 'IPN validated for Order @order_number with ID @pay_key.!ipn_data', array('@order_number' => $order->order_number, '@pay_key' => $ipn['pay_key'], '!ipn_data' => $ipn_data), WATCHDOG_NOTICE);
+  }
+  else {
+    watchdog('commerce_paypal_simple', 'IPN validated for Order @order_number.!ipn_data', array('@order_number' => $order->order_number, '!ipn_data' => $ipn_data), WATCHDOG_NOTICE);
+  }
+}
+
+/**
+ * Payment method callback: process an IPN once it's been validated.
+ */
+function commerce_paypal_simple_paypal_ipn_process($order, $payment_method, &$ipn) {
+  dd(__FUNCTION__, date("h:i:s" ,time()));
+  // For now, we only recognize COMPLETED paychains
+  // Exit when we don't get a payment status of COMPLETED.
+  if ($ipn['status'] != 'COMPLETED') {
+    commerce_payment_redirect_pane_previous_page($order);
+    return FALSE;
+  }
+  // Great - we're looking at a completed simple payment
+  // Store each of the effective payments as commerce transactions
+  foreach ($ipn['transaction'] as $key => $ipn_transaction) {
+    $transaction = commerce_payment_transaction_new('paypal_simple', $order->order_id);
+    $transaction->instance_id = $payment_method['instance_id'];
+    $transaction->remote_id = $ipn['pay_key'];
+    $transaction->field_simple_receiver_email[LANGUAGE_NONE][0]['value'] = $ipn_transaction['receiver'];
+    // amount contains the currency code and the transaction amount
+    list($transaction->currency_code, $transaction->amount) = explode(' ', $ipn_transaction['amount']);
+/*
+    // If this is the primary transaction, deduct the secondary transactions
+    // from it (leaving the primary transaction with what the primary receiver
+    // effectively received when all was said and done).  This helps describe
+    // who got paid what on the payments tab of an order, and ensures the sum
+    // of all of the payments totals to the order total.
+    if ($ipn_transaction['is_primary_receiver'] == 'true') {
+      foreach ($ipn['transaction'] as $ipn_transaction_inner) {
+        if ($ipn_transaction_inner['is_primary_receiver'] == 'false') {
+          list( , $inner_amount) = explode(' ', $ipn_transaction_inner['amount']);
+          $transaction->amount -= $inner_amount;
+        }
+      }
+    }
+*/
+    // Convert our amount from a decimal back to an integer for storage in the
+    // database.
+    $transaction->amount = commerce_currency_decimal_to_amount($transaction->amount, $transaction->currency_code);
+    $transaction->payload[REQUEST_TIME . '-ipn'] = $ipn;
+    // Set the transaction's statuses based on the IPN transaction's status.
+    $transaction->remote_status = $ipn_transaction['status'];
+    // Set our internal transaction status
+    switch ($ipn_transaction['status']) {
+      case 'Pending':
+        $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+        $transaction->message = t('The payment is pending.');
+        break;
+
+      case 'Completed':
+        $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+        $transaction->message = t('The payment has completed.');
+        break;
+
+      case 'Refunded':
+        $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+        $transaction->message = t('Refund for transaction @pay_key', array('@pay_key' => $ipn['parent_txn_id']));
+        break;
+    }
+    // Save the transaction information.
+    commerce_payment_transaction_save($transaction);
+    $ipn['transaction'][$key]['transaction_id'] = $transaction->transaction_id;
+  }
+  commerce_payment_redirect_pane_next_page($order);
+  watchdog('commerce_paypal_simple', 'IPN processed for Order @order_number with ID @pay_key.', array('@pay_key' => $ipn['pay_key'], '@order_number' => $order->order_number), WATCHDOG_INFO);
+}
+
+/**
+ * Builds a Website Payments Standard form from an order object.
+ *
+ * @param $order
+ *   The fully loaded order being paid for.
+ * @param $settings
+ *   An array of settings used to build out the form, including:
+ *   - server: which server to use, either sandbox or live
+ *   - business: the PayPal e-mail address the payment submits to
+ *   - cancel_return: the URL PayPal should send the user to on cancellation
+ *   - return: the URL PayPal should send the user to on successful payment
+ *   - currency_code: the PayPal currency code to use for this payment if the
+ *     total for the order is in a non-PayPal supported currency
+ *   - language: the PayPal language code to use on the payment form
+ *   - payment_action: the PayPal payment action to use: sale, authorization,
+ *     or order
+ *   - payment_method: optionally a payment method instance ID to include in the
+ *     IPN notify_url
+ *
+ * @return
+ *   A renderable form array.
+ */
+function commerce_paypal_simple_order_form($form, &$form_state, $order, $settings) {
+  dd($order, 'order');
+
+  $wrapper = entity_metadata_wrapper('commerce_order', $order);
+  dd($wrapper, 'wrapper');
+
+  // Determine the currency code to use to actually process the transaction,
+  // which will either be the default currency code or the currency code of the
+  // order if it's supported by PayPal if that option is enabled.
+  $currency_code = $settings['currency_code'];
+  $order_currency_code = $wrapper->commerce_order_total->currency_code->value();
+  if (!empty($settings['allow_supported_currencies']) && in_array($order_currency_code, array_keys(commerce_paypal_currencies('paypal_simple')))) {
+    $currency_code = $order_currency_code;
+  }
+  $amount = $wrapper->commerce_order_total->amount->value();
+  // Ensure a default value for the payment_method setting.
+  $settings += array('payment_method' => '');
+  // Populate the receivers array (define our simple payment)
+  // We'll define the first receiver as our primary
+
+  $product_uid = commerce_paypal_simple_get_product_owner($order);
+  $product_user = user_load($product_uid);
+
+  //module_exists('token'))
+  $receivers = array(
+    0 => array(
+      'amount' => commerce_paypal_price_amount(commerce_currency_convert($amount, $order_currency_code, $currency_code), $currency_code),
+      'email' =>  token_replace('[user:field-paypal-simple-paypal-email]', array('user' => $product_user))),
+  );
+
+  $memo = t('Order @order_number at @store', array('@order_number' => $order->order_number, '@store' => variable_get('site_name', url('<front>', array('absolute' => TRUE)))));
+  // Use the commerce_paypal ipn invoice number so we associate the IPN response
+  // with this order when it comes back.
+  $tracking_id = commerce_paypal_ipn_invoice($order);
+  // We've defined our own IPN url for this module, which is why we're not using
+  // commerce_paypal_ipn_url() here.
+  $ipn_url = url('commerce_paypal/paypal-simple/ipn', array('absolute' => TRUE));
+  // Reach out to PayPal for a paykey to associate with this order
+  // The Pay Key essentially defines our simple payment on PayPal's end, and
+  // we'll need to pass this, along with the user, over to PayPal.
+  $pay_key = commerce_paypal_simple_get_paykey(
+    $receivers,
+    $memo,
+    $tracking_id,
+    $settings['application_id'],
+    $currency_code,
+    $settings['cancel_return'],
+    $settings['return'],
+    $ipn_url,
+    $settings['server'],
+    $settings['api_username'],
+    $settings['api_password'],
+    $settings['api_signature']
+  );
+  // If we got a pay key back, then we're clear to transact with these settings,
+  // in which case we'll store a copy of the chain details for IPN validation
+  if (!empty($pay_key)) {
+    // If a previous pay chain was associated with this order, delete it
+    // Add db_table_exists for development purpose
+    if (db_table_exists('commerce_paypal_simple_pay_chain'))
+      db_delete('commerce_paypal_simple_pay_chain')
+        ->condition('order_id', $order->order_id)
+        ->execute();
+    // Store our order's pay chain, as we've defined it above
+    $pay_chain = array(
+      'order_id' => $order->order_id,
+      'pay_key' => $pay_key,
+      'currency' => $currency_code,
+      'data' => $receivers,
+    );
+    drupal_write_record('commerce_paypal_simple_pay_chain', $pay_chain);
+  }
+  // Set our form action to
+  $form['#action'] = commerce_paypal_simple_server_url($settings['server']) . '?cmd=_ap-payment&paykey=' . $pay_key;
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Proceed to PayPal'),
+  );
+  return $form;
+}
+
+/**
+ * Returns the URL to the specified PayPal Simple server.
+ *
+ * @param $server
+ *   Either sandbox or live indicating which server to get the URL for.
+ *
+ * @return
+ *   The URL to use to submit requests to the PayPal Simple server.
+ */
+function commerce_paypal_simple_server_url($server) {
+  dd(__FUNCTION__, date("h:i:s" ,time()));
+  switch ($server) {
+    case 'sandbox':
+      return 'https://www.sandbox.paypal.com/cgi-bin/webscr';
+    case 'live':
+      return 'https://www.paypal.com/cgi-bin/webscr';
+  }
+}
+
+/**
+ * Returns an array of all possible language codes.
+ */
+function commerce_paypal_simple_languages() {
+  return array(
+    t('By country') => array(
+      'AU' => t('Australia'),
+      'AT' => t('Austria'),
+      'BE' => t('Belgium'),
+      'BR' => t('Brazil'),
+      'CA' => t('Canada'),
+      'CN' => t('China'),
+      'FR' => t('France'),
+      'DE' => t('Germany'),
+      'IT' => t('Italy'),
+      'NL' => t('Netherlands'),
+      'PL' => t('Poland'),
+      'PT' => t('Portugal'),
+      'RU' => t('Russia'),
+      'ES' => t('Spain'),
+      'CH' => t('Switzerland'),
+      'GB' => t('United Kingdom'),
+      'US' => t('United States'),
+    ),
+    t('By language') => array(
+      'da_DK' => t('Danish (for Denmark only)'),
+      'he_IL' => t('Hebrew (for all)'),
+      'id_ID' => t('Indonesian (for Indonesia only)'),
+      'jp_JP' => t('Japanese (for Japan only)'),
+      'no_NO' => t('Norwegian (for Norway only)'),
+      'pt_BR' => t('Brazilian Portuguese (for Portugal and Brazil only)'),
+      'ru_RU' => t('Russian (for Lithuania, Latvia, and Ukraine only)'),
+      'sv_SE' => t('Swedish (for Sweden only)'),
+      'th_TH' => t('Thai (for Thailand only)'),
+      'tr_TR' => t('Turkish (for Turkey only)'),
+      'zh_CN' => t('Simplified Chinese (for China only)'),
+      'zh_HK' => t('Traditional Chinese (for Hong Kong only)'),
+      'zh_TW' => t('Traditional Chinese (for Taiwan only)'),
+    ),
+  );
+}
+
+/**
+ * Returns a PayPal Adaptive Payments PayKey for a proposed transaction.
+ *
+ * The total payment amount should be directed at the primary receiver, whom
+ * the buyer will pay directly.  The subsequent receivers will then recieve
+ * their payment amounts directly from the primary receiver.
+ *
+ * @param array $receivers
+ *   An array of receivers of this payment, eg.,
+ *    array(
+ *      0 => array(
+ *        'amount' => 10,
+ *        'email' => 'receiver1@example.com',
+ *        'primary' => 'true',
+ *      ),
+ *      1 => array(
+ *        'amount' => 5,
+ *        'email' => 'receiver2@example.com',
+ *        'primary' => 'false',
+ *      ),
+ *    );
+ * @param string $memo
+ *   A note associated with the payment.
+ * @param string $tracking_id
+ *   A unique ID that you specify to track the payment.
+ * @param string $application_id
+ *   Your PayPal application's identification, issued by PayPal.
+ * @param string $currency_code
+ *   The code for the currency in which the payment is made.
+ * @param string $cancel_url
+ *   URL to redirect the sender's browser to after canceling the approval for
+ *   a payment.
+ * @param string $return_url
+ *   URL to redirect the sender's browser to after the sender has logged into
+ *   PayPal and approved a payment.
+ * @param string $ipn_url
+ *   The URL to which you want all IPN messages for this payment to be sent.
+ * @param string $server
+ *   Whether to use the sandbox or live (production) endpoint for this API
+ *   call.
+ * @param string $api_username
+ *   Your PayPal API username.
+ * @param string $api_password
+ *   Your PayPal API password.
+ * @param string $api_signature
+ *   Your PayPal API signature.
+ */
+function commerce_paypal_simple_get_paykey($receivers, $memo = '', $tracking_id = '', $application_id, $currency_code, $cancel_url, $return_url, $ipn_url, $server = 'sandbox', $api_username, $api_password, $api_signature) {
+  // Build our payrequest
+  dd(__FUNCTION__, date("h:i:s" ,time()));
+  $pay_request = array(
+    'actionType' => 'PAY',
+    'receiverList' => array(
+      'receiver' => $receivers,
+    ),
+    'memo' => $memo,
+    'trackingId' => $tracking_id,
+    'clientDetails' => array(
+      'applicationId' => $application_id,
+    ),
+    'currencyCode' => $currency_code,
+    'cancelUrl' => $cancel_url,
+    'returnUrl' => $return_url,
+    'ipnNotificationUrl' => $ipn_url,
+    'requestEnvelope' => array(
+      'errorLanguage' => 'en_US',
+    ),
+  );
+  // Convert it to JSON
+  $pay_request_json = json_encode($pay_request);
+  // Initialize cURL with our desired API endpoint
+  switch ($server) {
+    case 'sandbox':
+      $ch = curl_init('https://svcs.sandbox.paypal.com/AdaptivePayments/Pay');
+      break;
+    case 'live':
+      $ch = curl_init('https://svcs.paypal.com/AdaptivePayments/Pay');
+      break;
+  }
+  // We'll be sending POST data
+  curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "POST");
+  // The data is our JSON string
+  curl_setopt($ch, CURLOPT_POSTFIELDS, $pay_request_json);
+  // Instead of outputting the response, return it in a string as the result
+  // of our call to curl_exec().
+  curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
+  // Set our request headers
+  curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+    'Content-Type: application/json',
+    'Content-Length: ' . strlen($pay_request_json),
+    'X-PAYPAL-SECURITY-USERID: ' . $api_username,
+    'X-PAYPAL-SECURITY-PASSWORD: ' . $api_password,
+    'X-PAYPAL-SECURITY-SIGNATURE: ' . $api_signature,
+    'X-PAYPAL-REQUEST-DATA-FORMAT: JSON',
+    'X-PAYPAL-RESPONSE-DATA-FORMAT: JSON',
+    'X-PAYPAL-APPLICATION-ID: ' . $application_id,
+  ));
+  // Execute this request, storing the result
+  $result = curl_exec($ch);
+  // All done with cURL, close our connection
+  curl_close($ch);
+  // Our response was in JSON, so decode it into a PHP object
+  $result = json_decode($result);
+  dd($result, 'json_decode');
+  // If PayPal gave us an acknowledgement of success and a paykey, proceed
+  if (strtolower($result->responseEnvelope->ack) == 'success' && !empty($result->payKey)) {
+    // Return the PayKey
+    return $result->payKey;
+  }
+  // Else something went wrong - PayPal didn't like what we sent
+  else {
+    return FALSE;
+  }
+}
+
+/**
+ * Returns an array of all possible currency codes for the PayPal Simple
+ * payment method.
+ *
+ * @return
+ *   An associative array of currency codes with keys and values being the
+ *   currency codes accepted by the PayPal Simple payment method.
+ */
+function commerce_paypal_simple_currencies() {
+  return drupal_map_assoc(array('AUD', 'BRL', 'CAD', 'CHF', 'CZK', 'DKK', 'EUR', 'GBP', 'HKD', 'HUF', 'ILS', 'JPY', 'MXN', 'MYR', 'NOK', 'NZD', 'PHP', 'PLN', 'SEK', 'SGD', 'THB', 'TRY', 'TWD', 'USD'));
+}
+
+/**
+ * Implements hook_views_api().
+ */
+function commerce_paypal_simple_views_api() {
+  return array(
+    'api' => 3,
+    'path' => drupal_get_path('module', 'commerce_paypal_simple') . '/includes/views',
+  );
+}
